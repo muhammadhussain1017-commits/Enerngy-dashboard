@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plant Energy Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; margin: 0; padding: 20px; }
+h1 { text-align: center; margin-bottom: 20px; color: #333; }
+#controls { display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; margin-bottom: 30px; }
+select { padding: 8px 12px; font-size: 16px; border-radius: 6px; border: 1px solid #ccc; }
+.dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.chart-container, .kpi-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+.kpi-card { display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 18px; font-weight: bold; }
+.kpi-card span { font-size: 28px; color: #007bff; margin-top: 5px; }
+@media(max-width: 900px) { .dashboard { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>Plant Energy Dashboard</h1>
+
+<div id="controls">
+  <label>Month:
+    <select id="monthFilter"><option value="All">All</option></select>
+  </label>
+  <label>Section:
+    <select id="sectionFilter"><option value="All">All</option></select>
+  </label>
+</div>
+
+<div class="dashboard">
+  <div class="kpi-card" id="totalEnergyCard">Total Energy<span>0</span></div>
+  <div class="kpi-card" id="maxEnergyCard">Max Daily Energy<span>0</span></div>
+  <div class="chart-container">
+    <canvas id="lineChart"></canvas>
+  </div>
+  <div class="chart-container">
+    <canvas id="barChart"></canvas>
+  </div>
+</div>
+
+<script>
+const EXCEL_URL = "https://1drv.ms/x/c/8ed45a0e755ce881/IQBxw6oFTHZKSLSJZ9AD0wwWAW9TmY5oXmaFuEg_0tyMvT0?e=S6QMTC"; // Replace with your OneDrive link
+
+async function loadExcel() {
+    const res = await fetch(EXCEL_URL);
+    const arrayBuffer = await res.arrayBuffer();
+    const workbook = XLSX.read(arrayBuffer, { type: "array" });
+    const sheet = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+    return sheet;
+}
+
+function populateFilters(data) {
+    const months = new Set();
+    const sections = new Set();
+    data.forEach(r => {
+        const d = new Date(r.Date);
+        months.add(`${d.getFullYear()}-${("0"+(d.getMonth()+1)).slice(-2)}`);
+        sections.add(r.PlantSection);
+    });
+    months.forEach(m => document.getElementById("monthFilter").add(new Option(m, m)));
+    sections.forEach(s => document.getElementById("sectionFilter").add(new Option(s, s)));
+}
+
+function filterData(data, month, section) {
+    return data.filter(r => {
+        const d = new Date(r.Date);
+        const m = `${d.getFullYear()}-${("0"+(d.getMonth()+1)).slice(-2)}`;
+        return (month === "All" || m === month) && (section === "All" || r.PlantSection === section);
+    });
+}
+
+function renderKPI(data) {
+    const total = data.reduce((sum, r) => sum + r.EnergyConsumed, 0);
+    const max = Math.max(...data.map(r => r.EnergyConsumed), 0);
+    document.querySelector("#totalEnergyCard span").textContent = total.toLocaleString();
+    document.querySelector("#maxEnergyCard span").textContent = max.toLocaleString();
+}
+
+function renderLineChart(data) {
+    const ctx = document.getElementById('lineChart').getContext('2d');
+    const labels = data.map(r => r.Date);
+    const values = data.map(r => r.EnergyConsumed);
+    if (window.lineChart) window.lineChart.destroy();
+    window.lineChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{
+                label: 'Daily Energy (kWh)',
+                data: values,
+                borderColor: '#007bff',
+                backgroundColor: 'rgba(0,123,255,0.2)',
+                tension: 0.3,
+                fill: true,
+                pointRadius: 5,
+                pointHoverRadius: 7
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { tooltip: { mode: 'index', intersect: false } },
+            interaction: { mode: 'nearest', axis: 'x', intersect: false },
+            scales: { x: { title: { display: true, text: 'Date' } }, y: { title: { display: true, text: 'Energy (kWh)' } } }
+        }
+    });
+}
+
+function renderBarChart(data) {
+    const ctx = document.getElementById('barChart').getContext('2d');
+    const totals = {};
+    data.forEach(r => totals[r.PlantSection] = (totals[r.PlantSection] || 0) + r.EnergyConsumed);
+    const labels = Object.keys(totals);
+    const values = Object.values(totals);
+    const colors = values.map(v => v > 1000 ? 'rgba(220,53,69,0.7)' : 'rgba(40,167,69,0.7)'); // Red if >1000 kWh
+
+    if (window.barChart) window.barChart.destroy();
+    window.barChart = new Chart(ctx, {
+        type: 'bar',
+        data: { labels, datasets: [{ label: 'Total Energy', data: values, backgroundColor: colors, borderColor: colors.map(c => c.replace('0.7','1')), borderWidth: 1 }] },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false }, tooltip: { mode: 'index' } },
+            scales: { x: { title: { display: true, text: 'Plant Section' } }, y: { title: { display: true, text: 'Energy (kWh)' } } }
+        }
+    });
+}
+
+async function main() {
+    const data = await loadExcel();
+    populateFilters(data);
+
+    const monthFilter = document.getElementById("monthFilter");
+    const sectionFilter = document.getElementById("sectionFilter");
+
+    function update() {
+        const filtered = filterData(data, monthFilter.value, sectionFilter.value);
+        renderKPI(filtered);
+        renderLineChart(filtered);
+        renderBarChart(filtered);
+    }
+
+    monthFilter.addEventListener("change", update);
+    sectionFilter.addEventListener("change", update);
+
+    update();
+}
+
+main();
+</script>
+</body>
+</html>
